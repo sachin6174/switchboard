@@ -1,0 +1,38 @@
+# Dependencies and build output
+node_modules/
+dist/
+release/
+macout/
+*.tsbuildinfo
+
+# Generated screenshots and accessibility reports (scripts/capture-ui.cjs)
+artifacts/
+
+# Personal data: chat backups, saved sessions and credential dumps
+.chats/
+Details/
+.aiswitch/
+
+# Secrets and signing material
+.env*
+*.p8
+*.p12
+*.pfx
+*.cer
+*.pem
+*.key
+*.mobileprovision
+
+# Logs and temporary files
+*.log
+*.tmp
+*.aiswitch-tmp
+__pycache__/
+*.pyc
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json

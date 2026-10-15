@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Switchboard">
+  <rect x="24" y="24" width="976" height="976" rx="252" fill="#172b31"/>
+  <g fill="none" stroke="#a4ead7" stroke-linecap="round" stroke-width="108">
+    <path d="M376 402l-98 220" opacity=".76"/>
+    <path d="M586 303L438 722"/>
+    <path d="M755 404l-97 218" opacity=".76"/>
+  </g>
+</svg>
