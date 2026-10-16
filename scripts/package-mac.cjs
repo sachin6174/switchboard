@@ -1,101 +1,51 @@
 /*
- * Build one signed DMG per Mac architecture. Each DMG carries only its own
- * Claude Code binary, so the platform package for the other architecture is
- * moved aside while that architecture builds and put back afterwards.
+ * Build one signed DMG per Mac architecture, each carrying only its own Claude
+ * Code binary. Run on macOS after `npm run build` (npm run dist:mac does both).
  *
  * Signing uses the "Developer ID Application" identity in the login keychain
- * (override with CSC_NAME). Notarization runs when APPLE_KEYCHAIN_PROFILE,
- * APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER, or
- * APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID is set.
+ * (choose another with CSC_NAME). When notarization credentials are set, the
+ * app is notarized during the build and the DMG is notarized and stapled
+ * afterwards. Credentials, in order of preference:
+ *   APPLE_KEYCHAIN_PROFILE                       (xcrun notarytool store-credentials)
+ *   APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER
+ *   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
  *
  *   node scripts/package-mac.cjs            # arm64 and x64
  *   node scripts/package-mac.cjs arm64      # one architecture
  */
-const fs = require("node:fs");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { projectRoot, run, withOnlyClaudeBinary } = require("./claude-binary-package.cjs");
 
-const projectRoot = path.resolve(__dirname, "..");
-const builderCli = path.resolve(
-  path.dirname(require.resolve("electron-builder/package.json")),
-  "cli.js",
-);
-const scopeDir = path.join(projectRoot, "node_modules", "@anthropic-ai");
-const parkingDir = path.join(projectRoot, "node_modules", ".switchboard-parked");
+if (process.platform !== "darwin") throw new Error("macOS DMGs can only be built and signed on macOS.");
+
+const { productName } = require(path.join(projectRoot, "package.json")).build;
+const { version } = require(path.join(projectRoot, "package.json"));
+const builderCli = path.resolve(path.dirname(require.resolve("electron-builder/package.json")), "cli.js");
 const allArchs = ["arm64", "x64"];
 const archs = process.argv.slice(2).length ? process.argv.slice(2) : allArchs;
-
-const sdkPackage = (arch) => `claude-agent-sdk-darwin-${arch}`;
-const sdkVersion = require(path.join(scopeDir, "claude-agent-sdk", "package.json")).version;
-
 for (const arch of archs) {
   if (!allArchs.includes(arch)) throw new Error(`Unknown architecture: ${arch}`);
 }
 
-const hasNotaryCredentials = Boolean(
-  process.env.APPLE_KEYCHAIN_PROFILE ||
-  (process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) ||
-  (process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID),
-);
-if (!hasNotaryCredentials) {
-  console.warn("No notarization credentials found: the DMGs will be signed but not notarized.");
-}
+const env = process.env;
+const notaryArgs =
+  env.APPLE_KEYCHAIN_PROFILE ? ["--keychain-profile", env.APPLE_KEYCHAIN_PROFILE] :
+  env.APPLE_API_KEY && env.APPLE_API_KEY_ID && env.APPLE_API_ISSUER ?
+    ["--key", env.APPLE_API_KEY, "--key-id", env.APPLE_API_KEY_ID, "--issuer", env.APPLE_API_ISSUER] :
+  env.APPLE_ID && env.APPLE_APP_SPECIFIC_PASSWORD && env.APPLE_TEAM_ID ?
+    ["--apple-id", env.APPLE_ID, "--password", env.APPLE_APP_SPECIFIC_PASSWORD, "--team-id", env.APPLE_TEAM_ID] :
+  null;
+if (!notaryArgs) console.warn("No notarization credentials found: the DMGs will be signed but not notarized.");
 
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { cwd: projectRoot, stdio: "inherit", ...options });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} exited with ${result.status}`);
-}
-
-/** npm installs only the host's optional package; fetch the other one from the registry. */
-function ensureSdkPackage(arch) {
-  const target = path.join(scopeDir, sdkPackage(arch));
-  const parked = path.join(parkingDir, sdkPackage(arch));
-  if (fs.existsSync(target)) return;
-  if (fs.existsSync(parked)) {
-    fs.renameSync(parked, target);
-    return;
-  }
-  const spec = `@anthropic-ai/${sdkPackage(arch)}@${sdkVersion}`;
-  console.log(`Fetching ${spec}`);
-  fs.mkdirSync(parkingDir, { recursive: true });
-  const packed = spawnSync("npm", ["pack", spec, "--pack-destination", parkingDir, "--silent"], {
-    cwd: projectRoot, encoding: "utf8",
-  });
-  if (packed.status !== 0) throw new Error(`npm pack ${spec} failed: ${packed.stderr}`);
-  const tarball = path.join(parkingDir, packed.stdout.trim().split("\n").pop());
-  fs.mkdirSync(target);
-  run("tar", ["-xzf", tarball, "-C", target, "--strip-components=1"]);
-  fs.rmSync(tarball);
-}
-
-function parkSdkPackage(arch) {
-  const target = path.join(scopeDir, sdkPackage(arch));
-  if (!fs.existsSync(target)) return;
-  fs.mkdirSync(parkingDir, { recursive: true });
-  fs.renameSync(target, path.join(parkingDir, sdkPackage(arch)));
-}
-
-const initiallyPresent = allArchs.filter((arch) => fs.existsSync(path.join(scopeDir, sdkPackage(arch))));
-
-try {
-  for (const arch of archs) {
-    ensureSdkPackage(arch);
-    for (const other of allArchs) if (other !== arch) parkSdkPackage(other);
+for (const arch of archs) {
+  withOnlyClaudeBinary(`claude-agent-sdk-darwin-${arch}`, () => {
     console.log(`Building macOS ${arch} DMG`);
-    run(process.execPath, [
-      builderCli,
-      "--mac",
-      "dmg",
-      `--${arch}`,
-      `--config.mac.notarize=${hasNotaryCredentials}`,
-    ]);
+    run(process.execPath, [builderCli, "--mac", "dmg", `--${arch}`, `--config.mac.notarize=${Boolean(notaryArgs)}`]);
+  });
+  if (notaryArgs) {
+    const dmg = path.join(projectRoot, "release", `${productName}-${version}-${arch}.dmg`);
+    console.log(`Notarizing ${path.basename(dmg)}`);
+    run("xcrun", ["notarytool", "submit", dmg, ...notaryArgs, "--wait"]);
+    run("xcrun", ["stapler", "staple", dmg]);
   }
-} finally {
-  // Leave node_modules as npm installed it.
-  for (const arch of allArchs) {
-    if (initiallyPresent.includes(arch)) ensureSdkPackage(arch);
-    else parkSdkPackage(arch);
-  }
-  fs.rmSync(parkingDir, { recursive: true, force: true });
 }

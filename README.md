@@ -4,7 +4,12 @@ Switchboard is a local desktop app for Windows, macOS and Linux with separate co
 
 ## Install and connect
 
-1. Install the build for your system. On macOS, download the `.dmg` from [Releases](https://github.com/sachin6174/switchboard/releases/latest) (`arm64` for Apple silicon, `x64` for Intel) and drag Switchboard to Applications; the macOS builds are signed with a Developer ID and notarized by Apple. On Windows (`Switchboard Setup *.exe`) and Linux (`.AppImage`/`.deb`), build from source (see **Build from source**); those builds are unsigned, so the system may show a publisher warning.
+1. Download the installer for your system from [Releases](https://github.com/sachin6174/switchboard/releases/latest):
+   - **macOS:** `Switchboard-<version>-arm64.dmg` (Apple silicon) or `-x64.dmg` (Intel). Open it and drag Switchboard to Applications. These builds are signed with a Developer ID and notarized by Apple.
+   - **Windows:** `Switchboard-<version>-Setup-x64.exe`. The installer is not Authenticode-signed, so SmartScreen shows "Windows protected your PC" on first run; choose **More info → Run anyway**.
+   - **Linux (x64):** `Switchboard-<version>-amd64.deb` (`sudo apt install ./Switchboard-*.deb`) or `Switchboard-<version>-x86_64.AppImage` (`chmod +x` it, then run it).
+
+   Every file has a GPG signature; see **Verifying a download**.
 2. Choose **Add account** and select a connection type:
    - **ChatGPT:** Complete OpenAI's official **Sign in with ChatGPT** flow in your browser. The browser returns to Switchboard through a temporary local callback.
    - **Claude account:** Name the connection and complete the official Claude Code sign-in in your browser. Claude Code keeps each sign-in in a separate local profile; chat requests use Anthropic's Agent SDK and the selected Claude account. This route requires Anthropic's approval for a third-party product that offers claude.ai subscription login.
@@ -70,16 +75,31 @@ npm test
 npm run dev
 ```
 
-`npm run dev` builds the renderer and main process, then opens Electron. To make an installer:
+`npm run dev` builds the renderer and main process, then opens Electron.
+
+### Installers
+
+| Command | Output in `release/` | Run on |
+|---|---|---|
+| `npm run dist:mac` | `Switchboard-<version>-arm64.dmg`, `-x64.dmg` | macOS |
+| `npm run dist:win` | `Switchboard-<version>-Setup-x64.exe` | Windows or macOS |
+| `npm run dist:linux` | `Switchboard-<version>-x86_64.AppImage`, `-amd64.deb` | Linux; or macOS/Windows with Docker |
+| `npm run release` | `SHA256SUMS.txt` and GPG signatures (`.asc`) | anywhere |
+| `npm run release:upload` | the above, attached to GitHub release `v<version>` | anywhere, with `gh` signed in |
+
+A macOS machine with Docker can build all three platforms. Each installer carries only its own platform's Claude Code binary: the scripts fetch that `@anthropic-ai/claude-agent-sdk-<platform>-<arch>` package from npm when it isn't installed, check it against `package-lock.json`, and put `node_modules` back as it was afterwards ([scripts/claude-binary-package.cjs](scripts/claude-binary-package.cjs)).
+
+- **macOS** ([scripts/package-mac.cjs](scripts/package-mac.cjs)) signs with the `Developer ID Application` certificate in your keychain (choose another with `CSC_NAME`) using the hardened runtime and `build/entitlements.mac.plist`. To notarize, store credentials once with `xcrun notarytool store-credentials <profile> --apple-id <id> --team-id <team>` and run `APPLE_KEYCHAIN_PROFILE=<profile> npm run dist:mac`; the app is notarized during the build and each DMG is notarized and stapled afterwards. App Store Connect API keys (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`) also work. Without a certificate the DMGs are unsigned.
+- **Windows** ([scripts/package-win.cjs](scripts/package-win.cjs)) builds the NSIS installer in a temporary directory, which avoids file rename errors in synced workspaces, then copies the `.exe` to `release/`. A failed build leaves the temporary directory in place and prints its path. The installer is Authenticode-signed only when electron-builder has a code-signing certificate (`CSC_LINK` and `CSC_KEY_PASSWORD`, or Azure Trusted Signing through `win.azureSignOptions`); otherwise it is unsigned and SmartScreen warns on first run.
+- **Linux** ([scripts/package-linux.cjs](scripts/package-linux.cjs)) builds natively on Linux for the host architecture and rebuilds node-pty against Electron. On macOS or Windows it builds x64 packages inside the `electronuserland/builder:22` Docker image from your working tree (tracked files plus untracked files that aren't ignored); pass `--docker` to use Docker on Linux too.
+- **Release** ([scripts/release.cjs](scripts/release.cjs)) collects the installers for the current version, writes `SHA256SUMS.txt`, and signs each file with GPG (choose the key with `GPG_KEY`; skip with `npm run release -- --no-sign`). It exports the signing public key as `switchboard-release-key.asc`.
+
+### Verifying a download
 
 ```sh
-npm run dist         # Windows .exe (run on Windows)
-npm run dist:mac     # macOS arm64 and x64 .dmg (run on macOS)
-npm run dist:linux   # Linux .AppImage and .deb (run on Linux)
+gpg --import switchboard-release-key.asc
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing    # sha256sum on Linux
 ```
 
-`package-lock.json` was created on Windows, and npm leaves out other platforms' native packages in that case (npm issue #4828). On macOS or Linux, if the build stops with "Cannot find native binding" for rolldown, run `npm install --no-save @rolldown/binding-<platform>-<arch>` with the rolldown version shown in `node_modules/rolldown/package.json` (for example `@rolldown/binding-darwin-arm64`), or recreate the lockfile on that machine.
-
-`npm run dist:mac` (`scripts/package-mac.cjs`) builds one DMG per architecture, each with only its own Claude Code binary; it fetches the other architecture's `@anthropic-ai/claude-agent-sdk-darwin-*` package from npm and puts `node_modules` back as it was afterwards. It signs with the `Developer ID Application` certificate in your keychain (choose another with `CSC_NAME`) using the hardened runtime and `build/entitlements.mac.plist`. To notarize, store credentials once with `xcrun notarytool store-credentials <profile> --apple-id <id> --team-id <team>` and run `APPLE_KEYCHAIN_PROFILE=<profile> npm run dist:mac`. Without a certificate or credentials the DMGs are unsigned or unnotarized.
-
-The Windows packaging script builds in a unique temporary directory to avoid file rename errors in synced workspaces, then copies the `.exe` to `release/`. It removes its own temporary directory after a successful copy. A failed build leaves the temporary directory in place and prints its path for troubleshooting.
+Release signing key fingerprint: `3A31 2E20 529B 7941 9565  6841 024E B25F 2A41 03B6`.
