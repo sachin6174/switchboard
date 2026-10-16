@@ -15,7 +15,7 @@
     "dist": "npm run build && node scripts/package-win.cjs",
     "test": "tsx --test tests/*.test.ts",
     "dist:win": "npm run build && node scripts/package-win.cjs",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip",
+    "dist:mac": "npm run build && node scripts/package-mac.cjs",
     "dist:linux": "npm run build && electron-builder --linux AppImage deb"
   },
   "dependencies": {
@@ -71,7 +71,17 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "sign": true
     },
     "linux": {
       "target": [

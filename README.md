@@ -4,7 +4,7 @@ Switchboard is a local desktop app for Windows, macOS and Linux with separate co
 
 ## Install and connect
 
-1. Install the build for your system: `Switchboard Setup *.exe` on Windows, the `.dmg` on macOS, or the `.AppImage`/`.deb` on Linux (see **Build from source**). The builds are unsigned, so the system may show a publisher warning.
+1. Install the build for your system. On macOS, download the `.dmg` from [Releases](https://github.com/sachin6174/switchboard/releases/latest) (`arm64` for Apple silicon, `x64` for Intel) and drag Switchboard to Applications; the macOS builds are signed with a Developer ID and notarized by Apple. On Windows (`Switchboard Setup *.exe`) and Linux (`.AppImage`/`.deb`), build from source (see **Build from source**); those builds are unsigned, so the system may show a publisher warning.
 2. Choose **Add account** and select a connection type:
    - **ChatGPT:** Complete OpenAI's official **Sign in with ChatGPT** flow in your browser. The browser returns to Switchboard through a temporary local callback.
    - **Claude account:** Name the connection and complete the official Claude Code sign-in in your browser. Claude Code keeps each sign-in in a separate local profile; chat requests use Anthropic's Agent SDK and the selected Claude account. This route requires Anthropic's approval for a third-party product that offers claude.ai subscription login.
@@ -74,10 +74,12 @@ npm run dev
 
 ```sh
 npm run dist         # Windows .exe (run on Windows)
-npm run dist:mac     # macOS .dmg and .zip (run on macOS)
+npm run dist:mac     # macOS arm64 and x64 .dmg (run on macOS)
 npm run dist:linux   # Linux .AppImage and .deb (run on Linux)
 ```
 
 `package-lock.json` was created on Windows, and npm leaves out other platforms' native packages in that case (npm issue #4828). On macOS or Linux, if the build stops with "Cannot find native binding" for rolldown, run `npm install --no-save @rolldown/binding-<platform>-<arch>` with the rolldown version shown in `node_modules/rolldown/package.json` (for example `@rolldown/binding-darwin-arm64`), or recreate the lockfile on that machine.
+
+`npm run dist:mac` (`scripts/package-mac.cjs`) builds one DMG per architecture, each with only its own Claude Code binary; it fetches the other architecture's `@anthropic-ai/claude-agent-sdk-darwin-*` package from npm and puts `node_modules` back as it was afterwards. It signs with the `Developer ID Application` certificate in your keychain (choose another with `CSC_NAME`) using the hardened runtime and `build/entitlements.mac.plist`. To notarize, store credentials once with `xcrun notarytool store-credentials <profile> --apple-id <id> --team-id <team>` and run `APPLE_KEYCHAIN_PROFILE=<profile> npm run dist:mac`. Without a certificate or credentials the DMGs are unsigned or unnotarized.
 
 The Windows packaging script builds in a unique temporary directory to avoid file rename errors in synced workspaces, then copies the `.exe` to `release/`. It removes its own temporary directory after a successful copy. A failed build leaves the temporary directory in place and prints its path for troubleshooting.
