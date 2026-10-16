@@ -13,6 +13,8 @@ export type TerminalInfo = {
   exitCode: number | null;
   /** Sequence number of the latest output chunk. */
   seq: number;
+  /** Windows build number when the terminal runs on ConPTY, so xterm.js can match its line handling. */
+  windowsBuild?: number;
 };
 
 /** Where folder terminals open: inside the app, or in the system's terminal app. */

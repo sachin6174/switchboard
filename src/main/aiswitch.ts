@@ -231,7 +231,9 @@ export function terminalLaunch(platform: NodeJS.Platform, command: string, args:
   if (platform === "win32") {
     const line = [command, ...args].map(cmdQuote).join(" ");
     const where = cwd ? ["/D", `"${cwd.replace(/"/g, "")}"`] : [];
-    return { command: "cmd.exe", args: ["/c", "start", `"${title.replace(/"/g, "")}"`, ...where, "cmd.exe", "/k", line], options: { ...detached, windowsVerbatimArguments: true } };
+    // /s with the whole line in one more pair of quotes: cmd strips exactly that pair, so a line
+    // that itself starts with a quoted path ("C:\Program Files\...\python.exe" ...) survives.
+    return { command: "cmd.exe", args: ["/c", "start", `"${title.replace(/"/g, "")}"`, ...where, "cmd.exe", "/d", "/s", "/k", `"${line}"`], options: { ...detached, windowsVerbatimArguments: true } };
   }
   const run = [command, ...args].map(posixQuote).join(" ");
   const line = cwd ? `cd ${posixQuote(cwd)} && ${run}` : run;

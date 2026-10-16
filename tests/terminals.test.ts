@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ptySpawnSpec, TerminalError, TerminalManager, type TerminalMeta } from "../src/main/terminals";
+import { ptySpawnSpec, TerminalError, TerminalManager, windowsBuildNumber, windowsExecutable, type TerminalMeta } from "../src/main/terminals";
 
 const META: TerminalMeta = { tool: "codex", folderId: "f1", folderName: "shop", cwd: process.cwd(), title: "Codex · shop" };
 
@@ -27,7 +27,42 @@ test("on macOS and Linux the CLI runs inside the user's login shell, so their PA
   const mac = ptySpawnSpec("darwin", { command: "/usr/bin/python3", args: ["/My App/aiswitch.py", "run", "claude", "--dangerously-skip-permissions"] }, "/bin/zsh");
   assert.deepEqual(mac, { file: "/bin/zsh", args: ["-l", "-i", "-c", "exec /usr/bin/python3 '/My App/aiswitch.py' run claude --dangerously-skip-permissions"] });
   assert.equal(ptySpawnSpec("linux", { command: "python3", args: [] }, undefined).file, "/bin/bash");
-  assert.deepEqual(ptySpawnSpec("win32", { command: "py", args: ["-3", "a.py"] }, undefined), { file: "py", args: ["-3", "a.py"] });
+});
+
+test("on Windows the program starts by its full path, found on PATH like cmd.exe does", () => {
+  const files = new Set(["C:\\Windows\\py.exe", "C:\\Python312\\python.exe", "C:\\Tools\\python.cmd"]);
+  const exists = (file: string) => files.has(file);
+  // Windows writes the variable as "Path"; node-pty's own lookup would miss py.exe entirely.
+  const env = { Path: 'C:\\Tools;"C:\\Windows";C:\\Python312' };
+  assert.deepEqual(ptySpawnSpec("win32", { command: "py", args: ["-3", "a.py"] }, undefined, env, exists),
+    { file: "C:\\Windows\\py.exe", args: ["-3", "a.py"] });
+  // A .cmd file can't be started directly, so only .exe/.com count; the last PATH folder is searched too.
+  assert.equal(windowsExecutable("python", env, exists), "C:\\Python312\\python.exe");
+  assert.equal(windowsExecutable("C:\\Program Files\\Python\\python.exe", env, exists), "C:\\Program Files\\Python\\python.exe");
+  assert.throws(() => windowsExecutable("python3", env, exists), (error: unknown) =>
+    error instanceof TerminalError && error.code === "NOT_FOUND" && /python3 wasn't found on PATH/.test(error.message));
+});
+
+test("a program that can't start is reported with the reason, and Windows starts the resolved program", async () => {
+  const meta: TerminalMeta = { tool: "codex", folderId: "f", folderName: "p", cwd: "C:\\p", title: "Codex · p" };
+  const failing = new TerminalManager({ data: () => {}, exit: () => {} }, {
+    platform: "darwin",
+    env: { SHELL: "/bin/zsh" },
+    loadPty: async () => ({ spawn: () => { throw new Error("posix_spawnp failed."); } }) as any,
+  });
+  await assert.rejects(failing.start({ command: "python3", args: [] }, meta), (error: unknown) =>
+    error instanceof TerminalError && error.code === "START_FAILED" && /couldn't start zsh: posix_spawnp failed/.test(error.message));
+
+  const pty = fakePty();
+  const windows = new TerminalManager({ data: () => {}, exit: () => {} }, {
+    platform: "win32",
+    env: { Path: process.platform === "win32" ? process.env.Path ?? "" : "" },
+    loadPty: async () => pty.module,
+  });
+  await windows.start({ command: "C:\\Python312\\python.exe", args: ["a.py"] }, meta);
+  assert.equal(pty.calls.spawn?.file, "C:\\Python312\\python.exe");
+  assert.equal(windowsBuildNumber("10.0.22631"), 22631);
+  assert.equal(windowsBuildNumber("25.6.0"), undefined);
 });
 
 test("output is batched into numbered chunks, kept for redraw, and input reaches the program", async () => {

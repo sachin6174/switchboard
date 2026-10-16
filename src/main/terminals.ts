@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { accessSync, chmodSync, constants, existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { IPty } from "node-pty";
 import type { AiswitchToolId } from "../shared/aiswitch";
@@ -20,7 +21,7 @@ export type TerminalEvents = {
 type PtyModule = Pick<typeof import("node-pty"), "spawn">;
 
 export class TerminalError extends Error {
-  constructor(public code: "CLOSED" | "PTY_UNAVAILABLE", message: string) {
+  constructor(public code: "CLOSED" | "PTY_UNAVAILABLE" | "NOT_FOUND" | "START_FAILED", message: string) {
     super(message);
     this.name = "TerminalError";
   }
@@ -34,12 +35,38 @@ function posixQuote(value: string): string {
 }
 
 /**
+ * The full path of a Windows program given by bare name (`py`, `python`), found the way cmd.exe
+ * finds it: each PATH folder in order, trying .exe then .com. node-pty's own lookup doesn't add an
+ * extension (and skips the last PATH folder), so it never finds `py`.
+ */
+export function windowsExecutable(command: string, env: NodeJS.ProcessEnv, exists: (file: string) => boolean = existsSync): string {
+  if (/[\\/]/.test(command)) return command;
+  // Windows environment names are case-insensitive; Node's copy of the environment is not.
+  const pathValue = Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
+  const extensions = path.win32.extname(command) ? [""] : [".exe", ".com"];
+  for (const dir of pathValue.split(";").map((entry) => entry.replace(/"/g, "").trim()).filter(Boolean)) {
+    for (const extension of extensions) {
+      const file = path.win32.join(dir, command + extension);
+      if (exists(file)) return file;
+    }
+  }
+  throw new TerminalError("NOT_FOUND", `${command} wasn't found on PATH. Reinstall Python 3 with "Add to PATH" checked, then reopen Switchboard.`);
+}
+
+/**
  * How to start `command` on the pty. On macOS and Linux it runs inside the user's login shell, so
  * PATH and other settings from their shell profile apply (an app opened from the Dock or a launcher
- * gets only a minimal PATH, and wouldn't find codex/claude/agy).
+ * gets only a minimal PATH, and wouldn't find codex/claude/agy). On Windows the program starts
+ * directly, by its full path.
  */
-export function ptySpawnSpec(platform: NodeJS.Platform, run: TerminalCommand, shell: string | undefined): { file: string; args: string[] } {
-  if (platform === "win32") return { file: run.command, args: run.args };
+export function ptySpawnSpec(
+  platform: NodeJS.Platform,
+  run: TerminalCommand,
+  shell: string | undefined,
+  env: NodeJS.ProcessEnv = {},
+  exists?: (file: string) => boolean,
+): { file: string; args: string[] } {
+  if (platform === "win32") return { file: windowsExecutable(run.command, env, exists), args: run.args };
   const line = [run.command, ...run.args].map(posixQuote).join(" ");
   return { file: shell || (platform === "darwin" ? "/bin/zsh" : "/bin/bash"), args: ["-l", "-i", "-c", `exec ${line}`] };
 }
@@ -61,6 +88,11 @@ function ensureSpawnHelper(): void {
   } catch {
     // Best effort: if this fails, starting a terminal reports the problem.
   }
+}
+
+/** The build number in a Windows release string such as "10.0.22631". */
+export function windowsBuildNumber(release: string): number | undefined {
+  return Number(release.split(".")[2]) || undefined;
 }
 
 type Session = {
@@ -96,15 +128,23 @@ export class TerminalManager {
     }
     env.TERM = "xterm-256color";
     env.COLORTERM = "truecolor";
-    const spec = ptySpawnSpec(platform, run, env.SHELL);
-    const pty = (await this.loadPty()).spawn(spec.file, spec.args, {
-      name: "xterm-256color",
-      cols: Math.max(20, size.cols),
-      rows: Math.max(5, size.rows),
-      cwd: meta.cwd,
-      env,
-    });
+    const spec = ptySpawnSpec(platform, run, env.SHELL, env);
+    const ptyModule = await this.loadPty();
+    let pty: IPty;
+    try {
+      pty = ptyModule.spawn(spec.file, spec.args, {
+        name: "xterm-256color",
+        cols: Math.max(20, size.cols),
+        rows: Math.max(5, size.rows),
+        cwd: meta.cwd,
+        env,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new TerminalError("START_FAILED", `The terminal couldn't start ${path.basename(spec.file)}: ${detail}`);
+    }
     const info: TerminalInfo = { id: randomUUID(), ...meta, startedAt: Date.now(), running: true, exitCode: null, seq: 0 };
+    if (platform === "win32") info.windowsBuild = windowsBuildNumber(os.release());
     const session: Session = { info, pty, scrollback: "", pending: "", timer: null };
     this.sessions.set(info.id, session);
     pty.onData((data) => {

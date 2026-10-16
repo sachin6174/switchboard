@@ -126,7 +126,7 @@ GRACE_SECONDS = 2.0
 
 def load_json(path, default):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return default
 
@@ -136,10 +136,23 @@ def write_private(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".aiswitch-tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_BINARY: on Windows os.open defaults to text mode, which would turn every \n into \r\n.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data.encode() if isinstance(data, str) else data)
-    os.replace(tmp, path)
+    move(tmp, path)
+
+
+def move(src, dst):
+    """os.replace, retried on Windows, where a file or folder can't be replaced or renamed while
+    another program (antivirus, the search indexer, a running CLI) briefly has it open."""
+    for attempt in range(10 if IS_WINDOWS else 1):
+        try:
+            return os.replace(src, dst)
+        except PermissionError:
+            if attempt == 9 or not IS_WINDOWS:
+                raise
+            time.sleep(0.2)
 
 
 def save_state(state):
@@ -373,7 +386,7 @@ def restore(tool, src):
 
     kc = manifest.get("keychain")
     if kc and (src / "keychain").exists() and uses_secret_store(cfg):
-        secret_write(kc["service"], kc["account"], (src / "keychain").read_text())
+        secret_write(kc["service"], kc["account"], (src / "keychain").read_text(encoding="utf-8"))
     elif uses_secret_store(cfg):
         secret_delete(cfg["keychain_service"], cfg.get("keychain_account"))
 
@@ -430,8 +443,8 @@ def sync_active(tool, state):
         return
     old = PROFILES / tool / ".old"
     shutil.rmtree(old, ignore_errors=True)
-    os.rename(profile_dir(tool, active), old)
-    os.rename(fresh, profile_dir(tool, active))
+    move(profile_dir(tool, active), old)
+    move(fresh, profile_dir(tool, active))
     shutil.rmtree(old, ignore_errors=True)
 
 
@@ -785,7 +798,7 @@ def label_of(d):
             return acct["emailAddress"]
     for fname in m.get("files", {}).values():
         try:
-            text = (d / fname).read_text()
+            text = (d / fname).read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
         found = re.search(r'"email"\s*:\s*"([^"]+)"', text)
@@ -803,7 +816,7 @@ def label_of(d):
     kc_file = d / "keychain"
     if kc_file.exists():
         try:
-            kc_text = kc_file.read_text()
+            kc_text = kc_file.read_text(encoding="utf-8")
             if kc_text.startswith("go-keyring-base64:"):
                 import base64
                 kc_text = base64.b64decode(kc_text.split(":", 1)[1]).decode("utf-8", "ignore")
@@ -859,8 +872,8 @@ def adopt_live_login(tool, interactive=True):
             name = match[0]
             old = PROFILES / tool / ".old"
             shutil.rmtree(old, ignore_errors=True)
-            os.rename(profile_dir(tool, name), old)
-            os.rename(pending, profile_dir(tool, name))
+            move(profile_dir(tool, name), old)
+            move(pending, profile_dir(tool, name))
             shutil.rmtree(old, ignore_errors=True)
         else:
             title = tool_cfg(tool).get("title", tool)
@@ -870,7 +883,7 @@ def adopt_live_login(tool, interactive=True):
                 name = ask_new_name(tool, "इसे किस नाम से save करें")
             else:
                 name = default_name(tool)
-            os.rename(pending, profile_dir(tool, name))
+            move(pending, profile_dir(tool, name))
             if interactive:
                 print(paint("  ✔ '%s' save हो गया" % name, "g"))
             else:
@@ -1076,7 +1089,7 @@ def claude_limits(name):
     """Live limits for a saved Claude account, or None if its access token has expired."""
     import urllib.request
     try:
-        oauth = json.loads((profile_dir("claude", name) / "keychain").read_text())["claudeAiOauth"]
+        oauth = json.loads((profile_dir("claude", name) / "keychain").read_text(encoding="utf-8"))["claudeAiOauth"]
     except (OSError, ValueError, KeyError):
         # Windows/Linux keep the token in .credentials.json instead of the Keychain
         oauth = None
@@ -1241,7 +1254,7 @@ def agy_processes():
     else:
         cmd = ["pgrep", "-fl", "(^|/)agy( |$)"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=20)
     except (OSError, subprocess.TimeoutExpired):
         return []
     return [line for line in r.stdout.splitlines() if line.strip()]
@@ -1508,7 +1521,7 @@ def alias_block():
 def aliases_installed():
     for f in alias_files():
         try:
-            if ALIAS_START in f.read_text():
+            if ALIAS_START in f.read_text(encoding="utf-8"):
                 return True
         except OSError:
             pass
@@ -1522,7 +1535,7 @@ def set_aliases(on):
     touched = []
     for f in alias_files():
         try:
-            text = f.read_text()
+            text = f.read_text(encoding="utf-8")
         except OSError:
             text = ""
         if ALIAS_START in text and ALIAS_END in text:
@@ -1530,7 +1543,7 @@ def set_aliases(on):
             text = text[:a].rstrip("\n") + ("\n" if text[:a].strip() else "") + text[b:].lstrip("\n")
         if on:
             text = text.rstrip("\n") + ("\n\n" if text.strip() else "") + alias_block() + "\n"
-        f.write_text(text)
+        f.write_text(text, encoding="utf-8")
         touched.append(str(f))
     return touched
 
@@ -1801,6 +1814,9 @@ def json_main(args):
         die("unknown json command: %s" % " ".join(args))
     except Failure as e:
         return reply(False, str(e))
+    except Exception as e:
+        # Always answer with a JSON line, so the app shows what went wrong instead of "did not answer".
+        return reply(False, "%s: %s" % (type(e).__name__, e))
 
 
 def main():

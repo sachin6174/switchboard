@@ -35,6 +35,8 @@ export function TerminalPane({ api, info, visible }: { api: SwitchboardApi; info
       // Keep every colour a CLI picks readable against the background (WCAG AA).
       minimumContrastRatio: 4.5,
       theme: THEME,
+      // ConPTY reflows and redraws lines itself; xterm.js must know, or resizing garbles the output.
+      ...(info.windowsBuild ? { windowsPty: { backend: "conpty" as const, buildNumber: info.windowsBuild } } : {}),
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);

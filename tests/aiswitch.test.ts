@@ -70,7 +70,8 @@ test("python launchers follow the platform, with AISWITCH_PYTHON first", () => {
 test("sign-in terminals are opened the native way on each platform", () => {
   const win = terminalLaunch("win32", "C:\\Program Files\\Python\\python.exe", ["C:\\app\\aiswitch.py", "add", "codex", "work"]);
   assert.equal(win.command, "cmd.exe");
-  assert.equal(win.args.at(-1), '"C:\\Program Files\\Python\\python.exe" C:\\app\\aiswitch.py add codex work');
+  // cmd /s strips only the outer pair of quotes, so a line starting with a quoted path survives.
+  assert.deepEqual(win.args.slice(-4), ["/d", "/s", "/k", '""C:\\Program Files\\Python\\python.exe" C:\\app\\aiswitch.py add codex work"']);
   assert.equal(win.options.windowsVerbatimArguments, true);
 
   const mac = terminalLaunch("darwin", "/usr/bin/python3", ["/Apps/My App/aiswitch.py", "add", "claude", "work"]);
