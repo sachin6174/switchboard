@@ -63,7 +63,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-Setup-${arch}.${ext}"
     },
     "npmRebuild": false,
     "mac": {
@@ -89,7 +90,8 @@
         "deb"
       ],
       "category": "Development",
-      "maintainer": "Switchboard contributors"
+      "maintainer": "Switchboard contributors",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     }
   }
 }

@@ -1,0 +1,50 @@
+# Builds the Windows and Linux installers on GitHub-hosted runners and keeps
+# them as workflow artifacts. Signing and attaching them to a release happen
+# afterwards on a maintainer's machine, so no signing keys live in CI.
+name: Build installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: release/*.exe
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # node-pty has no Linux prebuild, so rebuild it against Electron here.
+      - run: npm run build && npx electron-builder --linux AppImage deb --x64 --config.npmRebuild=true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error
